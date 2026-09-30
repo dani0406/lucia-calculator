@@ -50,7 +50,7 @@ def calculate_workbook(source, a_sheet='UL8 (A)', b_sheet='Binders (B)', require
     protein_names = protein_names or {}
     raw = source if isinstance(source, bytes) else Path(source).read_bytes()
     workbook = load_workbook(io.BytesIO(raw), data_only=True, read_only=True)
-    records, errors = [], []
+    records = []
     try:
         for sheet in [a_sheet, b_sheet]:
             if sheet not in workbook.sheetnames:
@@ -69,35 +69,50 @@ def calculate_workbook(source, a_sheet='UL8 (A)', b_sheet='Binders (B)', require
                       'dose_cells': f'{dose_col}{start}:{dose_col}{end}', 'target_signal': target,
                       'target_pmol': pmol, 'calibration_cfe_uL': list(doses),
                       'signals': [ws[f'F{r}'].value for r in range(start, end + 1)]}
-            record_errors = []
-            try:
-                record.update(fit_volume(doses, record['signals'], target))
-                volume = record['cfe_equivalent_uL']
-                factor = 10 if group == 'B' and volume < 1 else 1
-                record['dilution_factor'] = factor
-                record['dispense_uL'] = volume * factor
-                record['pbs_uL'] = 200 - record['dispense_uL']
-                record['stage'] = 'A before wash' if group == 'A' else 'B after wash'
-                record['incubation_minutes'] = 60 if group == 'A' else 5
-                if record['dispense_uL'] > 200:
-                    record_errors.append('Required protein dispense exceeds 200 µL.')
-                if group == 'A':
-                    record['available_cfe_uL'] = 540
-                    record['max_samples'] = math.floor(540 / volume)
-                    record['minimum_samples'] = minimum
-                    if record['max_samples'] < minimum:
-                        record_errors.append(f"Only {record['max_samples']} samples available; requires at least {minimum}.")
-            except ValueError as exc:
-                record_errors.append(str(exc))
-            record['errors'] = record_errors
             records.append(record)
-            errors.extend(f'{identity} ({record["protein_name"]}): {message}' for message in record_errors)
     finally:
         workbook.close()
-    return {'source_sha256': hashlib.sha256(raw).hexdigest(), 'signal_column': 'F',
+    return calculate_records(records, minimum, hashlib.sha256(raw).hexdigest())
+
+
+def calculate_records(records, minimum_samples=18, source_sha256='', signal_column='F'):
+    """Apply the same calibration and capacity rules to any set of protein groups."""
+    minimum = minimum_samples
+    if isinstance(minimum, bool) or not isinstance(minimum, int) or not 1 <= minimum <= 50:
+        raise ValueError('Required sample capacity must be a whole number from 1 to 50.')
+    results, errors = [], []
+    for inputs in records:
+        record = dict(inputs)
+        record_errors = []
+        group = record['group']
+        if group not in ('A', 'B'):
+            raise ValueError('Reader plate must be A or B.')
+        try:
+            record.update(fit_volume(tuple(record['calibration_cfe_uL']), record['signals'], record['target_signal']))
+            volume = record['cfe_equivalent_uL']
+            factor = 10 if group == 'B' and volume < 1 else 1
+            record['dilution_factor'] = factor
+            record['dispense_uL'] = volume * factor
+            record['pbs_uL'] = 200 - record['dispense_uL']
+            record['stage'] = 'A before wash' if group == 'A' else 'B after wash'
+            record['incubation_minutes'] = 60 if group == 'A' else 5
+            if record['dispense_uL'] > 200:
+                record_errors.append('Required protein dispense exceeds 200 µL.')
+            if group == 'A':
+                record['available_cfe_uL'] = 540
+                record['max_samples'] = math.floor(540 / volume)
+                record['minimum_samples'] = minimum
+                if record['max_samples'] < minimum:
+                    record_errors.append(f"Only {record['max_samples']} samples available; requires at least {minimum}.")
+        except ValueError as exc:
+            record_errors.append(str(exc))
+        record['errors'] = record_errors
+        results.append(record)
+        errors.extend(f'{record["protein_id"]} ({record["protein_name"]}): {message}' for message in record_errors)
+    return {'source_sha256': source_sha256, 'signal_column': signal_column,
             'signal_type': 'luminescence', 'blank_correction': 'none',
             'a_sample_rule': f'>={minimum}', 'minimum_samples': minimum,
-            'final_well_volume_uL': 200, 'proteins': records, 'errors': errors,
+            'final_well_volume_uL': 200, 'proteins': results, 'errors': errors,
             'sequence': ['Add A and PBS to 200 µL', 'Incubate 60 minutes', 'Wash (details pending)',
                          'Add B and PBS to 200 µL', 'Incubate 5 minutes', 'Measure'],
             'pbs_basis': 'Each stage is prepared separately to 200 µL; no retained wash volume is included.',
