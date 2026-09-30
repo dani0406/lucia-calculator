@@ -1,4 +1,4 @@
-"""Interactive destination plates: independent A/mCherry and B layers."""
+"""Interactive destination plates: choose an A protein or mCherry, then overlay B."""
 from copy import deepcopy
 import html
 import json
@@ -14,7 +14,25 @@ from lucia_destination import (assign_destination_wells, build_transfer_preview,
 from reader_plates import WELLS, selected_wells
 
 PALETTE = ['#0F766E', '#7C3AED', '#DB2777', '#2563EB', '#B45309', '#4D7C0F', '#C2410C', '#0369A1']
-LAYERS = ['A / mCherry', 'B overlay']
+LAYERS = ['A protein or mCherry', 'B overlay']
+
+
+def _remember_pending_value(widget_key, pending_key):
+    """Keep form choices when Streamlit removes a hidden conditional widget."""
+    st.session_state[pending_key] = st.session_state[widget_key]
+
+
+def _restore_pending_value(widget_key, default, options=None):
+    """Restore a durable choice before creating its widget without a default."""
+    pending_key = widget_key + ':pending_value'
+    if pending_key not in st.session_state:
+        st.session_state[pending_key] = st.session_state.get(widget_key, default)
+    value = st.session_state[pending_key]
+    if options is not None and value not in options:
+        value = default
+        st.session_state[pending_key] = value
+    st.session_state[widget_key] = value
+    return value, pending_key
 
 
 def _protein_name(catalog, group, identity):
@@ -49,7 +67,7 @@ def destination_figure(plate, catalog, selected, layer, selection_tool):
         elif item.get('label'):
             color = '#FEF3C7'
         a_name = control or _protein_name(catalog, 'A', a)
-        detail = f'A / mCherry: {html.escape(a_name)}<br>B overlay: {html.escape(_protein_name(catalog, "B", b))}'
+        detail = f'A protein or mCherry: {html.escape(a_name)}<br>B overlay: {html.escape(_protein_name(catalog, "B", b))}'
         if control:
             volume = item.get('control_volume_uL')
             detail += f'<br>mCherry: {volume:g} µL' if volume is not None else '<br>mCherry volume: decide later'
@@ -168,9 +186,10 @@ def render_destination_planner(report, namespace):
     st.session_state.setdefault(revision_key, 0)
     layouts = st.session_state[layout_key]
     if pending_key in st.session_state:
-        st.session_state[active_key] = st.session_state.pop(pending_key)
-    if layouts and st.session_state.get(active_key) not in layouts:
-        st.session_state[active_key] = next(iter(layouts))
+        requested_active = st.session_state.pop(pending_key)
+        st.session_state[active_key + ':pending_value'] = requested_active
+    _, pending_active_key = _restore_pending_value(
+        active_key, next(iter(layouts), ''), list(layouts))
     try:
         catalog = protein_catalog(report)
     except ValueError as exc:
@@ -186,13 +205,13 @@ def render_destination_planner(report, namespace):
         st.rerun()
 
     st.subheader('LUCIA plate planner')
-    st.caption('Place A proteins or mCherry first, then switch to the B overlay. Each well keeps both assignments; several A proteins can share one plate.')
+    st.caption('Choose one A protein or mCherry for each well, then add B in the B overlay. Different wells can use different A proteins.')
     if prefix + ':notice' in st.session_state:
         st.info(st.session_state.pop(prefix + ':notice'))
     if not catalog['A'] or not catalog['B']:
         st.info('Assign protein groups on the reader plates to make them available here. You can already place mCherry and label wells.')
-    active = st.selectbox('LUCIA plate', list(layouts), format_func=lambda identity: layouts[identity]['name'],
-                          key=active_key) if layouts else None
+    active = st.selectbox('LUCIA plate', list(layouts), format_func=lambda identity: layouts[identity]['name'], key=active_key,
+                          on_change=_remember_pending_value, args=(active_key, pending_active_key)) if layouts else None
     with st.expander('Manage plates'):
         left, right = st.columns(2)
         new_name = left.text_input('New plate name', value=f'LUCIA {len(layouts) + 1}', key=prefix + ':new_name')
@@ -229,17 +248,34 @@ def render_destination_planner(report, namespace):
         plate = layouts[active]
         plate_prefix = prefix + ':' + active
         selection_key, chart_key = plate_prefix + ':selected', plate_prefix + ':chart'
-        st.session_state.setdefault(selection_key, [])
-        layer = st.radio('Assignment layer', LAYERS, horizontal=True, key=plate_prefix + ':layer')
+        pending_selection, pending_selection_key = _restore_pending_value(selection_key, [])
+        # Migrate any pending choices from sessions opened before this version,
+        # including controls that are about to become hidden by a layer switch.
+        for suffix in (':A:protein', ':B:protein', ':set_control_volume', ':control_volume'):
+            widget_key = plate_prefix + suffix
+            pending_widget_key = widget_key + ':pending_value'
+            if pending_widget_key not in st.session_state and widget_key in st.session_state:
+                st.session_state[pending_widget_key] = st.session_state[widget_key]
+        layer_key = plate_prefix + ':layer'
+        if st.session_state.get(layer_key + ':pending_value') == 'A / mCherry':
+            st.session_state[layer_key + ':pending_value'] = LAYERS[0]
+        _, pending_layer_key = _restore_pending_value(layer_key, LAYERS[0], LAYERS)
+        layer = st.radio('Assignment layer', LAYERS, horizontal=True,
+                         key=layer_key, on_change=_remember_pending_value, args=(layer_key, pending_layer_key))
+        tool_options = ['Drag a box', 'Click wells', 'Lasso']
+        tool_key = plate_prefix + ':selection_tool'
+        _, pending_tool_key = _restore_pending_value(tool_key, tool_options[0], tool_options)
         selection_tool = st.radio('Selection tool', ['Drag a box', 'Click wells', 'Lasso'], horizontal=True,
-                                  key=plate_prefix + ':selection_tool')
+                                  key=tool_key,
+                                  on_change=_remember_pending_value, args=(tool_key, pending_tool_key))
 
         def handle_selection():
-            st.session_state[selection_key] = selected_wells(st.session_state[chart_key], dict.fromkeys(WELLS))
+            selected = selected_wells(st.session_state[chart_key], dict.fromkeys(WELLS))
+            st.session_state[pending_selection_key] = selected
 
         left, right = st.columns([3, 1.5], gap='large')
         with left:
-            st.plotly_chart(destination_figure(plate, catalog, st.session_state[selection_key], layer, selection_tool),
+            st.plotly_chart(destination_figure(plate, catalog, pending_selection, layer, selection_tool),
                             key=chart_key, on_select=handle_selection,
                             selection_mode=('points', 'box', 'lasso'), use_container_width=True,
                             config={'displaylogo': False, 'scrollZoom': False,
@@ -249,16 +285,16 @@ def render_destination_planner(report, namespace):
             st.markdown(f'**Assign {layer}**')
             first, second = st.columns(2)
             first.button('Select all', key=plate_prefix + ':select_all',
-                         on_click=lambda: st.session_state.update({selection_key: list(WELLS)}))
+                         on_click=lambda: st.session_state.update({pending_selection_key: list(WELLS)}))
             second.button('Deselect all', key=plate_prefix + ':deselect_all',
-                          on_click=lambda: st.session_state.update({selection_key: []}))
-            selected = st.multiselect('Selected destination wells', list(WELLS), key=selection_key)
+                          on_click=lambda: st.session_state.update({pending_selection_key: []}))
+            selected = st.multiselect('Selected destination wells', list(WELLS), key=selection_key, on_change=_remember_pending_value,
+                                      args=(selection_key, pending_selection_key))
             group = 'A' if layer == LAYERS[0] else 'B'
             options = ['keep', 'clear'] + (['mcherry'] if group == 'A' else [])
             options += ['protein:' + identity for identity in catalog[group]]
             protein_key = plate_prefix + ':' + group + ':protein'
-            if st.session_state.get(protein_key) not in options:
-                st.session_state[protein_key] = 'keep'
+            _, pending_protein_key = _restore_pending_value(protein_key, 'keep', options)
 
             def option_name(value):
                 if value == 'keep':
@@ -269,20 +305,38 @@ def render_destination_planner(report, namespace):
                     return 'mCherry control'
                 return _protein_name(catalog, group, value[len('protein:'):])
 
-            choice = st.selectbox('A protein or control' if group == 'A' else 'B protein', options,
-                                   format_func=option_name, key=protein_key)
+            choice = st.selectbox('Choose A protein or mCherry' if group == 'A' else 'B protein', options,
+                                   format_func=option_name, key=protein_key,
+                                   on_change=_remember_pending_value, args=(protein_key, pending_protein_key))
+            if group == 'B':
+                if catalog['B']:
+                    st.caption('To assign B: select destination wells, choose a B protein above, then click Assign selected wells.')
+                else:
+                    st.info('No B proteins are available yet. On Reader plate B, select the calibration wells, enter a protein group ID and name, and click Assign wells. Then return here and choose that B protein.')
             control_volume = None
             if choice == 'mcherry':
-                set_volume = st.checkbox('Set mCherry volume now', key=plate_prefix + ':set_control_volume')
+                set_volume_key = plate_prefix + ':set_control_volume'
+                _, pending_set_volume_key = _restore_pending_value(set_volume_key, False)
+                set_volume = st.checkbox('Set mCherry volume now', key=set_volume_key,
+                                         on_change=_remember_pending_value, args=(set_volume_key, pending_set_volume_key))
                 if set_volume:
+                    volume_key = plate_prefix + ':control_volume'
+                    _, pending_volume_key = _restore_pending_value(volume_key, 1.0)
                     control_volume = st.number_input('mCherry per well (µL)', min_value=0.001, max_value=200.0,
-                                                      value=1.0, step=0.1, format='%.3f', key=plate_prefix + ':control_volume')
+                                                      step=0.1, format='%.3f', key=volume_key,
+                                                      on_change=_remember_pending_value, args=(volume_key, pending_volume_key))
                 else:
                     st.caption('Leave the volume undecided while planning.')
-            label = st.text_input('Well label (optional)', key=plate_prefix + ':label',
-                                  help='A blank label keeps existing labels. Clear labels in the table below.')
-            if st.button('Assign selected wells', key=plate_prefix + ':assign', type='primary',
-                         disabled=not selected, use_container_width=True):
+            note_key = plate_prefix + ':label'
+            _, pending_note_key = _restore_pending_value(note_key, '')
+            label = st.text_input('Well note (optional)', key=note_key,
+                                  help='A note does not choose or assign a protein. Choose a protein in the dropdown above. A blank note keeps existing notes; clear them in the table below.',
+                                  on_change=_remember_pending_value, args=(note_key, pending_note_key))
+            button_label = 'Save well note' if choice == 'keep' else 'Assign selected wells'
+            if choice == 'keep':
+                st.caption('Choose a protein above to assign it. Saving a note keeps the current protein assignments.')
+            if st.button(button_label, key=plate_prefix + ':assign', type='primary',
+                         disabled=not selected or (choice == 'keep' and not label.strip()), use_container_width=True):
                 fields = {'label': label.strip() or None}
                 if group == 'A' and choice == 'mcherry':
                     fields.update(a_control='mCherry', control_volume_uL=control_volume if control_volume is not None else '')

@@ -71,6 +71,16 @@ def render_reader_plate(plate, group, namespace):
         st.session_state[undo_key] = st.session_state[layout_key]
         st.session_state[layout_key] = updated
 
+    def start_new_protein():
+        used_ids = {item['protein_id'] for item in st.session_state[layout_key].values()
+                    if item['role'] == 'Calibration'}
+        number = 1
+        while f'{group}{number}' in used_ids:
+            number += 1
+        st.session_state[prefix + ':protein'] = f'{group}{number}'
+        st.session_state[prefix + ':name'] = ''
+        st.session_state[selection_key] = []
+
     st.subheader(f'Reader plate {group}')
     st.caption(f'{plate["sheet"]} · {len(readings)} measured wells · signal column {plate["signal_column"]}')
     st.caption('Choose a selection tool below. Use Shift to add wells. Only wells present in the export can be assigned.')
@@ -93,9 +103,16 @@ def render_reader_plate(plate, group, namespace):
         identity, name, label, doses = '', '', '', None
         dose_text = None
         if role == 'Calibration':
-            identity = st.text_input('Protein group ID', value=f'{group}1', key=prefix + ':protein',
-                                     help='Use the same ID to add more calibration wells to that protein. Reader A and B groups are independent.')
-            name = st.text_input('Protein name (optional)', key=prefix + ':name', placeholder='Use group ID')
+            st.button(f'New {group} protein', key=prefix + ':new_protein', on_click=start_new_protein,
+                      help='Start with the next unused ID and select its calibration wells. Saved proteins stay in place.')
+            st.caption(f'Add as many {group} proteins as your measured wells support. Names are optional; default labels are {group}1, {group}2, {group}3, …')
+            st.session_state[prefix + ':protein'] = st.session_state.get(prefix + ':protein', f'{group}1')
+            st.session_state[prefix + ':name'] = st.session_state.get(prefix + ':name', '')
+            identity = st.text_input('Protein group ID', key=prefix + ':protein',
+                                     help='Each protein has its own ID. Use the same ID to add calibration wells to an existing protein. Reader A and B groups are independent.')
+            name = st.text_input('Protein name (optional)', key=prefix + ':name', placeholder='e.g. My protein',
+                                 help='Choose any display name, or leave blank to use the ID for a new protein. Adding wells to an existing ID keeps its saved name unless you enter a new one. Names appear on reader graphs, LUCIA plates and exports.')
+            st.caption('Select the calibration wells, optionally enter a name, then click Assign wells to save the group. Saved groups become protein choices on every LUCIA plate.')
             mode = st.radio('Assign calibration volumes', ['Same volume / replicates', 'Series in well order'], key=prefix + ':mode')
             if mode == 'Same volume / replicates':
                 dose = st.number_input('CFE per well (µL)', min_value=0.0, value=1.0 if group == 'A' else 0.01,
