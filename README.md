@@ -1,5 +1,15 @@
 # LUCIA reader plate calculator
 
+## LUCIA destination plate planner
+
+The **LUCIA plates** tab is separate from both reader plates. A destination well has an A protein **or** mCherry control, an independently assigned B overlay, and an optional label. Multiple A proteins can share one plate; there is no one-A-per-plate restriction. Protein choices come from the current reader calibration groups, including manually entered names. Assigning a B overlay preserves the A/control layer, and editing the A layer preserves B.
+
+Select wells by clicking, dragging a box, using a lasso, or choosing their well addresses. Switch between **A / mCherry** and **B overlay** to assign and colour the corresponding layer. The manual well table edits the same layout. Multiple named destination plates can be prepared, and undo restores the last layout edit. Save a layout as JSON and reload it in another session; a browser refresh alone does not preserve session edits.
+
+mCherry is available as a control even when it is absent from reader calibrations. Its volume may remain unset while planning; a future transfer preview needs an explicitly entered volume. No mCherry concentration or transfer volume is inferred. Missing B overlays also remain valid draft layouts. The preview lists remaining transfer details, validates assigned proteins against the current calibration, and totals A usage across all destination plates. Each stage is separately filled to 200 µL after the wash; a B overlay is not an instruction to combine both stage volumes at once. Required B dilutions are identified, not automatically prepared.
+
+The target robot is **Opentrons Flex**. This step creates and saves destination layouts only. The requested **Create script** workflow comes next, after the user chooses pipetting strategy and specifies physical sources, pooling, dilution preparation, labware, deck and wash handling. The planner does not generate or execute robot movement commands, and a complete layout is not a validated robot protocol.
+
 ## LUCIA workbook calculation
 
 The website has independent **Reader plate A** and **Reader plate B** editors. The worksheet selectors use the names found in the uploaded workbook. Unedited Tecan exports need one row per well, with 96-well addresses in column A and numeric measurements in column F by default. The measurement column can be changed separately for each reader plate. Duplicate well addresses are rejected rather than merged across measurement blocks. Protein names and calibration volumes are entered in the app; no Excel annotations or formulas are required.
@@ -49,7 +59,7 @@ Launch from this directory:
 
 Install dependencies with `python -m pip install -r requirements.txt`. The interface uses Python, Streamlit and Plotly; no custom JavaScript component or build step is needed.
 
-For Streamlit Community Cloud, the repository needs `app.py`, `lucia_ui.py`, `reader_plate_ui.py`, `reader_plates.py`, `reader_timecourse.py`, `reader_timecourse_ui.py`, `reader_barplot.py`, `reader_barplot_ui.py`, `lucia_calculations.py` and `requirements.txt`. Keep `app.py` as the entry point. The new reader files and updated requirements must be included together when publishing.
+For Streamlit Community Cloud, the repository needs `app.py`, `lucia_ui.py`, `reader_plate_ui.py`, `reader_plates.py`, `reader_timecourse.py`, `reader_timecourse_ui.py`, `reader_barplot.py`, `reader_barplot_ui.py`, `lucia_destination.py`, `lucia_destination_ui.py`, `lucia_calculations.py` and `requirements.txt`. Keep `app.py` as the entry point. The new files must be included together when publishing.
 
 Run the regression and interaction checks with `python -m unittest -v`. Tests use synthetic in-memory workbooks; no experimental data is required.
 

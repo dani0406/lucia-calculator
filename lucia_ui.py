@@ -10,6 +10,7 @@ from reader_plates import read_reader_plate, calculate_reader_plates
 from reader_plate_ui import render_reader_plate
 from reader_timecourse_ui import render_a_timecourse
 from reader_barplot_ui import render_b_barplot
+from lucia_destination_ui import render_destination_planner
 
 EXAMPLE_PATH = Path('/Volumes/bosse-grp/Group_Data/AVA NL assay/Aria_Binder/20260915_AD_JK_binders_3/20260917_JK_AD_DL_LUCIA.xlsx')
 
@@ -29,8 +30,8 @@ def cached_reader_plate(raw, sheet, signal_column):
 
 
 def render_lucia():
-    st.title('LUCIA · Reader plates')
-    st.caption('Upload readings → assign wells on reader plates A and B → calculate protein volumes')
+    st.title('LUCIA · Plate planner')
+    st.caption('Upload readings → calibrate proteins → arrange A, mCherry and B on LUCIA plates')
     uploaded = st.file_uploader('Upload the Tecan Excel workbook', type=['xlsx'], key='lucia_upload')
     use_example = False
     if uploaded is None and EXAMPLE_PATH.exists():
@@ -64,7 +65,7 @@ def render_lucia():
         st.error(f'Could not read this workbook: {exc}')
         return
     assignments = {}
-    tabs = st.tabs(['Reader plate A', 'Reader plate B'])
+    tabs = st.tabs(['Reader plate A', 'Reader plate B', 'LUCIA plates'])
     for group, tab in zip(('A', 'B'), tabs):
         with tab:
             assignments[group] = render_reader_plate(plates[group], group, workbook_key)
@@ -76,6 +77,12 @@ def render_lucia():
     minimum = st.slider('Required samples per A protein', min_value=1, max_value=50, value=18, step=1)
     st.caption(f'Each A protein must provide at least {minimum} samples. Exactly {minimum} passes.')
     report = calculate_reader_plates(plates, assignments, minimum)
+    with tabs[2]:
+        destination_layouts, destination_preview = render_destination_planner(report, workbook_key)
+    report['lucia_plates'] = destination_layouts
+    report['destination_preview'] = destination_preview
+    if destination_preview['ready']:
+        report['unresolved'] = [item for item in report['unresolved'] if item != 'destination wells']
     st.subheader('Calculated volumes')
     if not report['proteins']:
         st.info('Select calibration wells and assign their protein group and CFE volumes. For the original workbook layout, use the preset button on each reader plate.')
@@ -113,4 +120,4 @@ def render_lucia():
         st.markdown('**A + PBS to 200 µL → incubate 60 minutes → wash → B + PBS to 200 µL → incubate 5 minutes → measure.**')
         st.caption('PBS is calculated separately for each stage and assumes no retained wash liquid. Sample counts use full-precision volumes.')
         st.json(report['proteins'])
-    st.caption('Reader plates identify calibration measurements. Robot source wells, destination plates, pooling and wash settings still need their own setup. The uploaded workbook is not modified; no robot protocol is generated here.')
+    st.caption('Reader plates provide calibration measurements; the LUCIA plates tab saves destination assignments. Opentrons Flex source locations, pooling, labware, pipetting and wash setup will be configured in the script-generation step. The uploaded workbook is not modified.')
